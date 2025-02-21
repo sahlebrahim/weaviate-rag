@@ -5,5 +5,5 @@ openai
 python-dotenv
 psycopg2-binary
 weaviate
-weaviate.classes
-weaviate.classes.init
+#weaviate.classes
+#weaviate.classes.init
