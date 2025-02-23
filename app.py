@@ -278,12 +278,12 @@ def clear_feedback_text():
     st.session_state["correct_text"] = ""
 if "latest_query" in st.session_state and "latest_response" in st.session_state:
     with st.expander("provide feedback on the latest response"):
-    with st.form("feedback_form"):
-        feedback = st.text_area("Your comment or feedback on this response", key="feedback_text")
-        correct_resp = st.text_area("If the assistant was incorrect, provide the correct response", key="correct_text")
-        submitted = st.form_submit_button("submit feedback", on_click=clear_feedback_text)
-        if submitted:
-            save_query_to_db(
+        with st.form("feedback_form"):
+            feedback = st.text_area("Your comment or feedback on this response", key="feedback_text")
+            correct_resp = st.text_area("If the assistant was incorrect, provide the correct response", key="correct_text")
+            submitted = st.form_submit_button("submit feedback", on_click=clear_feedback_text)
+            if submitted:
+                save_query_to_db(
                 st.session_state.latest_query,
                 st.session_state.latest_response,
                 feedback,
@@ -291,4 +291,4 @@ if "latest_query" in st.session_state and "latest_response" in st.session_state:
                 st.session_state.latest_response_time,
                 correct_response=correct_resp
             )
-                st.success("feedback saved thank you for helping us improve")
+                    st.success("feedback saved thank you for helping us improve")
