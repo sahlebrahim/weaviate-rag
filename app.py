@@ -13,7 +13,7 @@ import weaviate
 from weaviate.classes.init import Auth
 from openai import OpenAI
 
-load_dotenv()
+load_dotenv(override=True)
 st.set_page_config(page_title="Sales Playbook Chat Assistant", layout="wide")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -53,14 +53,15 @@ def init_db():
         cur = conn.cursor()
         cur.execute('''
         create table if not exists query_logs (
-            id serial primary key,
-            query text,
-            response text,
-            comment text,
-            llm_model text,
-            response_time float,
-            timestamp timestamptz default now()
-        )
+    id serial primary key,
+    query text,
+    response text,
+    comment text,
+    correct_response text,     
+    llm_model text,
+    response_time float,
+    timestamp timestamptz default now()
+)
         ''')
         conn.commit()
         cur.close()
@@ -75,8 +76,9 @@ def save_query_to_db(query, response, comment, model, response_time):
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute('''
-            insert into query_logs (query, response, comment, llm_model, response_time)
-            values (%s, %s, %s, %s, %s)
+            insert into query_logs
+              (query, response, comment, llm_model, response_time, correct_response)
+            values (%s, %s, %s, %s, %s, %s)
         ''', (query, response, comment, model, response_time))
         conn.commit()
         cur.close()
@@ -273,17 +275,20 @@ if user_input := st.chat_input("Type your query..."):
 #feedbackform
 def clear_feedback_text():
     st.session_state["feedback_text"] = ""
+    st.session_state["correct_text"] = ""
 if "latest_query" in st.session_state and "latest_response" in st.session_state:
     with st.expander("provide feedback on the latest response"):
-        with st.form("feedback_form"):
-            feedback = st.text_area("your comment or feedback on this response",key ="feedback_text")
-            submitted = st.form_submit_button("submit feedback",on_click=clear_feedback_text)
-            if submitted:
-                save_query_to_db(
-                    st.session_state.latest_query,
-                    st.session_state.latest_response,
-                    feedback,
-                    st.session_state.latest_model,
-                    st.session_state.latest_response_time
-                )
+    with st.form("feedback_form"):
+        feedback = st.text_area("Your comment or feedback on this response", key="feedback_text")
+        correct_resp = st.text_area("If the assistant was incorrect, provide the correct response", key="correct_text")
+        submitted = st.form_submit_button("submit feedback", on_click=clear_feedback_text)
+        if submitted:
+            save_query_to_db(
+                st.session_state.latest_query,
+                st.session_state.latest_response,
+                feedback,
+                st.session_state.latest_model,
+                st.session_state.latest_response_time,
+                correct_response=correct_resp
+            )
                 st.success("feedback saved thank you for helping us improve")
