@@ -6,5 +6,3 @@ python-dotenv
 psycopg2-binary
 weaviate-client
 weaviate
-#weaviate.classes
-#weaviate.classes.init
