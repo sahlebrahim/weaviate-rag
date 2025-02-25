@@ -12,7 +12,7 @@ import weaviate.classes as wvc
 import weaviate
 from weaviate.classes.init import Auth
 from openai import OpenAI
-
+import cohere
 # 1) Load environment variables
 load_dotenv(override=True)
 st.set_page_config(page_title="Sales Playbook Chat Assistant", layout="wide")
@@ -21,6 +21,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEAVIATE_URL = os.getenv("WEAVIATE_URL")
 WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 POSTGRES_URL = os.getenv("DATABASE_URL")
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")  # new
 
 weaviate_url = os.environ["WEAVIATE_URL"]
 weaviate_api_key = os.environ["WEAVIATE_API_KEY"]
@@ -32,11 +33,36 @@ headers = {
 }
 
 # 2) Connect to Weaviate Cloud
+
+
+RAG_APP_PASSWORD = os.getenv("RAG_APP_PASSWORD")
+
+if "auth_passed" not in st.session_state:
+    st.session_state.auth_passed = False
+
+def login_screen():
+    st.title("Please Log In")
+    password_input = st.text_input("Enter Password", type="password")
+    if st.button("Login"):
+        if password_input == RAG_APP_PASSWORD:
+            st.session_state.auth_passed = True
+        else:
+            st.error("Incorrect password.")
+
+    # If still not authed, stop here
+    if not st.session_state.auth_passed:
+        st.stop()
+
+# 1) Check auth
+if not st.session_state.auth_passed:
+    login_screen()
 client = weaviate.connect_to_weaviate_cloud(
     cluster_url=weaviate_url,
     auth_credentials=Auth.api_key(weaviate_api_key),
-    headers=headers
+    headers=headers,
 )
+co = cohere.Client(COHERE_API_KEY) if COHERE_API_KEY else None
+
 
 # 3) Initialize session state for feedback text + correct text + a submission flag
 if "feedback_text" not in st.session_state:
@@ -111,17 +137,20 @@ def get_all_logs():
         return []
 
 # 5) Weaviate Hybrid Search
-def search_weaviate_hybrid(query, top_k=3, alpha=0.5):
+def search_weaviate_hybrid(query, top_k=10, alpha=0.5):
+    """
+    1) Embed the user query with OpenAI.
+    2) Perform a hybrid search in Weaviate with BM25 + vector using that query embedding.
+    3) Return chunk-like dicts: source, title, page_number, content.
+    """
     start_time = time.perf_counter()
-    # embed user query with OpenAI
     embed_response = client1.embeddings.create(
-        model="text-embedding-3-large",  # or your desired embedding model
+        model="text-embedding-3-large",
         input=[query]
     )
     query_emb = embed_response.data[0].embedding
     embedding_time = time.perf_counter() - start_time
 
-    # do hybrid search
     start_weaviate = time.perf_counter()
     playbook_collection = client.collections.get("Refinedchunk1")
 
@@ -133,7 +162,6 @@ def search_weaviate_hybrid(query, top_k=3, alpha=0.5):
     )
     weaviate_time = time.perf_counter() - start_weaviate
 
-    # convert results to chunk dicts
     chunks = []
     if response.objects:
         for obj in response.objects:
@@ -147,6 +175,53 @@ def search_weaviate_hybrid(query, top_k=3, alpha=0.5):
             chunks.append(chunk)
 
     return chunks, embedding_time, weaviate_time
+
+# new: cohere rerank on top of weaviate results
+def weaviate_plus_cohere_rerank(query, final_top_k=3, alpha=0.5, cohere_fetch=5):
+    """
+    1) weaviate hybrid search for e.g. 20 results
+    2) cohere rerank them
+    3) slice top final_top_k
+    """
+    # ensure we have a cohere client
+    if not co:
+        # fallback: just call the original weaviate search
+        return search_weaviate_hybrid(query, top_k=final_top_k, alpha=alpha)
+
+    # 1) get weaviate results
+    weaviate_results, emb_time, weav_time = search_weaviate_hybrid(query, top_k=cohere_fetch, alpha=alpha)
+
+    if not weaviate_results:
+        return [], emb_time, weav_time
+
+    # 2) cohere rerank
+    docs = [r["content"] for r in weaviate_results]
+    try:
+        # model can be e.g. "rerank-english-v2.0" or "rerank-multilingual-v2.0"
+        rerank_resp = co.rerank(
+            model="rerank-english-v2.0",
+            query=query,
+            documents=docs,
+            top_n=len(docs)
+        )
+    except Exception as e:
+        st.warning(f"Cohere rerank error: {e}")
+        # fallback: just return weaviate_results top final_top_k
+        return weaviate_results[:final_top_k], emb_time, weav_time
+
+    # reorder weaviate_results by cohere's relevance scores
+    indexed_results = {i: weaviate_results[i] for i in range(len(weaviate_results))}
+    reranked = []
+    for item in rerank_resp.results:
+        i = item.index
+        score = item.relevance_score
+        chunk = indexed_results[i]
+        chunk["cohere_score"] = score
+        reranked.append(chunk)
+
+    reranked.sort(key=lambda x: x["cohere_score"], reverse=True)
+    final_results = reranked[:final_top_k]
+    return final_results, emb_time, weav_time
 
 # 6) Build Prompt
 def build_prompt(query, chunks):
@@ -173,7 +248,7 @@ def query_openai_chat(model, prompt):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant. Use the provided document chunks to answer the user's question accurately."
+                    "content": "You are a helpful assistant. Use the provided document chunks to answer the user's question accurately. dont hallucinate however also be smart in looking through the contexts and answering accordingly"
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -291,3 +366,8 @@ if "latest_query" in st.session_state and "latest_response" in st.session_state:
                 # Mark feedback_submitted and rerun
                 st.session_state["feedback_submitted"] = True
                 st.rerun()
+
+
+
+
+#### undo till this.
