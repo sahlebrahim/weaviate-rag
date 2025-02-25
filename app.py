@@ -35,27 +35,26 @@ headers = {
 # 2) Connect to Weaviate Cloud
 
 
-RAG_APP_PASSWORD = os.getenv("RAG_APP_PASSWORD")
+RAG_APP_PASSWORD = os.getenv("RAG_APP_PASSWORD", "mysecret")
 
 if "auth_passed" not in st.session_state:
     st.session_state.auth_passed = False
 
-def login_screen():
+# We'll do the login check inline:
+if not st.session_state.auth_passed:
     st.title("Please Log In")
-    password_input = st.text_input("Enter Password", type="password")
-    if st.button("Login"):
-        if password_input == RAG_APP_PASSWORD:
+    pw = st.text_input("Enter Password", type="password")
+    login_clicked = st.button("Login")
+    if login_clicked:
+        if pw == RAG_APP_PASSWORD:
             st.session_state.auth_passed = True
         else:
             st.error("Incorrect password.")
 
-    # If still not authed, stop here
+    # if still not authed => stop
     if not st.session_state.auth_passed:
         st.stop()
 
-# 1) Check auth
-if not st.session_state.auth_passed:
-    login_screen()
 client = weaviate.connect_to_weaviate_cloud(
     cluster_url=weaviate_url,
     auth_credentials=Auth.api_key(weaviate_api_key),
