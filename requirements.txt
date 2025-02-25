@@ -6,3 +6,4 @@ python-dotenv
 psycopg2-binary
 weaviate-client
 weaviate
+cohere
