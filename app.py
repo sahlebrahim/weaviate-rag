@@ -37,23 +37,35 @@ headers = {
 
 RAG_APP_PASSWORD = os.getenv("RAG_APP_PASSWORD", "mysecret")
 
+# Initialize session state
 if "auth_passed" not in st.session_state:
     st.session_state.auth_passed = False
 
-# We'll do the login check inline:
+# Login handler function
+def handle_login():
+    if st.session_state.password_input == RAG_APP_PASSWORD:
+        st.session_state.auth_passed = True
+    else:
+        st.session_state.auth_error = True
+
+# Authentication check
 if not st.session_state.auth_passed:
     st.title("Please Log In")
-    pw = st.text_input("Enter Password", type="password")
-    login_clicked = st.button("Login")
-    if login_clicked:
-        if pw == RAG_APP_PASSWORD:
-            st.session_state.auth_passed = True
-        else:
-            st.error("Incorrect password.")
+    
+    # Using on_change callback with a key to prevent UI persistence
+    st.text_input("Enter Password", type="password", key="password_input", on_change=handle_login)
+    st.button("Login", on_click=handle_login)
+    
+    if "auth_error" in st.session_state and st.session_state.auth_error:
+        st.error("Incorrect password.")
+        st.session_state.auth_error = False
+    
+    # Stop the app if not authenticated
+    st.stop()
 
-    # if still not authed => stop
-    if not st.session_state.auth_passed:
-        st.stop()
+# Your main app code starts here (only runs if authenticated)
+st.title("Welcome to your RAG App")
+# Rest of your app...
 
 client = weaviate.connect_to_weaviate_cloud(
     cluster_url=weaviate_url,
@@ -151,7 +163,7 @@ def search_weaviate_hybrid(query, top_k=10, alpha=0.5):
     embedding_time = time.perf_counter() - start_time
 
     start_weaviate = time.perf_counter()
-    playbook_collection = client.collections.get("Refinedchunk1")
+    playbook_collection = client.collections.get("Refinedchunk2")
 
     response = playbook_collection.query.hybrid(
         query=query,
