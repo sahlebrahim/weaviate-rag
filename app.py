@@ -178,17 +178,17 @@ def search_weaviate_hybrid(query, top_k=10, alpha=0.5):
         for obj in response.objects:
             props = obj.properties
             chunk = {
-                "source": props.get("source", "unknown"),
-                "title": props.get("heading", ""),
-                "page_number": props.get("page", ""),
-                "content": props.get("text", "no content available")
-            }
+    "source": props.get("source", "unknown"),
+    "title": props.get("heading", ""),
+    "page_number": props.get("page_number", ""),  # now matches your schema
+    "content": props.get("text", "no content available")
+}
             chunks.append(chunk)
 
     return chunks, embedding_time, weaviate_time
 
 # new: cohere rerank on top of weaviate results
-def weaviate_plus_cohere_rerank(query, final_top_k=3, alpha=0.5, cohere_fetch=5):
+def weaviate_plus_cohere_rerank(query, final_top_k=3, alpha=0.5, cohere_fetch=10):
     """
     1) weaviate hybrid search for e.g. 20 results
     2) cohere rerank them
@@ -236,19 +236,34 @@ def weaviate_plus_cohere_rerank(query, final_top_k=3, alpha=0.5, cohere_fetch=5)
 
 # 6) Build Prompt
 def build_prompt(query, chunks):
-    context = "\n\n".join(
-        [f"source {c['source']} title {c['title']} page {c['page_number']} content\n{c['content']}"
-         for c in chunks]
-    )
+    """
+    Build a prompt that includes chunk text plus a soft note about the cohere score.
+    """
+    context_parts = []
+    for c in chunks:
+        # If there's no cohere_score, default to 0.0
+        score = c.get("cohere_score", 0.0)
+        context_parts.append(
+            f"Source: {c.get('source','unknown')}, "
+            f"Title: {c.get('title','')}, "
+            f"Page: {c.get('page_number','')}, "
+            f"Cohere Score (for reference only): {score:.2f}\n"
+            f"{c.get('content','')}"
+        )
+    context = "\n\n".join(context_parts)
+
     prompt = f"""
-use the following document excerpts to answer the user's query:
+Use the following document excerpts to answer the user's query.
+Cohere scores are included only as a reference. If a chunk is not relevant, do not include it in your final answer.
 
 {context}
 
 ---
-user query: {query}
+User Query: {query}
 
-answer the query based only on the provided content. if the answer cannot be determined from the content, state 'not available from the provided excerpts'.
+Answer the query based only on the provided content. 
+If the answer cannot be determined from these excerpts, say 'not available from the provided excerpts'.
+Remember: The cohere scores are not absolute; they are just hints.
 """
     return prompt.strip()
 
@@ -259,11 +274,18 @@ def query_openai_chat(model, prompt):
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant. Use the provided document chunks to answer the user's question accurately. dont hallucinate however also be smart in looking through the contexts and answering accordingly"
+                    "content": (
+                        "You are a helpful assistant. You have been given multiple chunks of text, "
+                        "each with a 'Cohere Score' that is purely informational. Use the chunk text "
+                        "to answer the user's question accurately. If a chunk is not relevant, ignore it. "
+                        "If the answer is not in the excerpts, say 'not available from the provided excerpts'. "
+                        "Do not rely solely on the numeric score. The user query follows."
+                    )
                 },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
+            max_tokens=2000,  # adjust if you want more length
             timeout=15,
         )
         return response.choices[0].message.content
@@ -313,7 +335,7 @@ if user_input := st.chat_input("Type your query..."):
         st.markdown(user_input)
 
     with st.spinner("Searching Weaviate..."):
-        retrieved_chunks, embedding_time, weaviate_time = search_weaviate_hybrid(user_input, top_k=3, alpha=0.5)
+        retrieved_chunks, embedding_time, weaviate_time = weaviate_plus_cohere_rerank(user_input, final_top_k=3, alpha=0.5)
 
     prompt_start = time.perf_counter()
     prompt = build_prompt(user_input, retrieved_chunks)
